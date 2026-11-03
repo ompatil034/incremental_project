@@ -326,7 +326,6 @@ sample_probability = loaded_model.predict_proba(
     sample_customer
 )[0][1]
 
-
 # Convert the 0 or 1 prediction into simple text
 if sample_prediction == 1:
     prediction_text = "Customer may exit"
