@@ -64,7 +64,6 @@ print(df.duplicated().sum())
 # Remove completely duplicate rows
 df = df.drop_duplicates()
 
-
 # Check that the target column exists
 if "Exited" not in df.columns:
     raise ValueError("The dataset must contain a column named Exited.")
@@ -1144,4 +1143,914 @@ print(
 print(
     "Learning curve saved at:",
     day3_learning_curve_path
+)
+
+
+# Import the tools needed for feature engineering, PCA, model comparison, and XGBoost
+import numpy as np
+
+from sklearn.base import clone
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import cross_validate
+from sklearn.preprocessing import FunctionTransformer
+
+try:
+    from xgboost import XGBClassifier
+
+except ImportError:
+    raise ImportError(
+        "XGBoost is not installed. "
+        "Run: python -m pip install xgboost"
+    )
+
+
+# Create useful new columns from the existing customer information
+def create_day4_features(customer_data):
+
+    # Make a copy so the original customer data is not changed
+    engineered_data = customer_data.copy()
+
+    # Use a very small number to prevent division by zero
+    small_number = 0.000001
+
+    # Compare the customer's balance with estimated salary
+    engineered_data["BalanceSalaryRatio"] = (
+        engineered_data["Balance"]
+        / (
+            engineered_data["EstimatedSalary"]
+            + small_number
+        )
+    )
+
+    # Compare the number of products with account tenure
+    engineered_data["ProductsPerTenure"] = (
+        engineered_data["NumOfProducts"]
+        / (
+            engineered_data["Tenure"]
+            + 1
+        )
+    )
+
+    # Compare the customer's age with account tenure
+    engineered_data["AgeTenureRatio"] = (
+        engineered_data["Age"]
+        / (
+            engineered_data["Tenure"]
+            + 1
+        )
+    )
+
+    # Compare the customer's credit score with age
+    engineered_data["CreditScoreAgeRatio"] = (
+        engineered_data["CreditScore"]
+        / (
+            engineered_data["Age"]
+            + small_number
+        )
+    )
+
+    # Mark customers who are active and have a positive balance
+    engineered_data["ActiveWithBalance"] = (
+        (
+            engineered_data["IsActiveMember"] == 1
+        )
+        & (
+            engineered_data["Balance"] > 0
+        )
+    ).astype(int)
+
+    # Mark customers whose account balance is zero
+    engineered_data["HasZeroBalance"] = (
+        engineered_data["Balance"] == 0
+    ).astype(int)
+
+    # Mark customers who use more than one bank product
+    engineered_data["HasMultipleProducts"] = (
+        engineered_data["NumOfProducts"] > 1
+    ).astype(int)
+
+    # Combine age and number of products into one interaction feature
+    engineered_data["AgeProductInteraction"] = (
+        engineered_data["Age"]
+        * engineered_data["NumOfProducts"]
+    )
+
+    # Combine balance and active membership into one feature
+    engineered_data["ActiveBalanceInteraction"] = (
+        engineered_data["Balance"]
+        * engineered_data["IsActiveMember"]
+    )
+
+    # Divide customer ages into simple age groups
+    engineered_data["AgeGroup"] = pd.cut(
+        engineered_data["Age"],
+        bins=[
+            0,
+            30,
+            40,
+            50,
+            60,
+            np.inf
+        ],
+        labels=[
+            "Under 30",
+            "30 to 39",
+            "40 to 49",
+            "50 to 59",
+            "60 and above"
+        ],
+        include_lowest=True
+    ).astype(str)
+
+    # Return the data containing both original and new features
+    return engineered_data
+
+
+# Convert the feature-engineering function into a pipeline step
+day4_feature_engineer = FunctionTransformer(
+    create_day4_features,
+    validate=False,
+    feature_names_out="one-to-one"
+)
+
+
+# Apply feature engineering once only to find the new column types
+day4_example_data = create_day4_features(
+    X_train
+)
+
+
+# Find all numerical columns after feature engineering
+day4_numerical_columns = (
+    day4_example_data
+    .select_dtypes(include=["number"])
+    .columns
+    .tolist()
+)
+
+
+# Find all categorical columns after feature engineering
+day4_categorical_columns = (
+    day4_example_data
+    .select_dtypes(exclude=["number"])
+    .columns
+    .tolist()
+)
+
+
+# Display the number of original and engineered features
+print("\n================================")
+print("DAY 4 FEATURE ENGINEERING")
+print("================================")
+
+print(
+    "Original number of columns:",
+    X_train.shape[1]
+)
+
+print(
+    "Number of columns after feature engineering:",
+    day4_example_data.shape[1]
+)
+
+print("\nNumerical columns:")
+print(day4_numerical_columns)
+
+print("\nCategorical columns:")
+print(day4_categorical_columns)
+
+
+# Fill missing numerical values and standardize numerical columns
+day4_numerical_pipeline = Pipeline(
+    steps=[
+        (
+            "imputer",
+            SimpleImputer(strategy="median")
+        ),
+        (
+            "scaler",
+            StandardScaler()
+        )
+    ]
+)
+
+
+# Fill missing text values and convert categories into numerical columns
+day4_categorical_pipeline = Pipeline(
+    steps=[
+        (
+            "imputer",
+            SimpleImputer(strategy="most_frequent")
+        ),
+        (
+            "onehot",
+            OneHotEncoder(
+                handle_unknown="ignore",
+                sparse_output=False
+            )
+        )
+    ]
+)
+
+
+# Process numerical and categorical engineered features separately
+day4_preprocessor = ColumnTransformer(
+    transformers=[
+        (
+            "numerical",
+            day4_numerical_pipeline,
+            day4_numerical_columns
+        ),
+        (
+            "categorical",
+            day4_categorical_pipeline,
+            day4_categorical_columns
+        )
+    ],
+    sparse_threshold=0
+)
+
+
+# Use PCA to keep 95 percent of the useful information
+day4_pca = PCA(
+    n_components=0.95,
+    random_state=RANDOM_STATE
+)
+
+
+# Count stayed and exited customers in the training data
+number_of_stayed_customers = (
+    y_train == 0
+).sum()
+
+number_of_exited_customers = (
+    y_train == 1
+).sum()
+
+
+# Calculate a class imbalance value for XGBoost
+xgboost_class_weight = (
+    number_of_stayed_customers
+    / number_of_exited_customers
+)
+
+
+# Display the class imbalance value used by XGBoost
+print(
+    "\nXGBoost scale_pos_weight:",
+    round(xgboost_class_weight, 4)
+)
+
+
+# Create a Random Forest bagging ensemble
+day4_random_forest = RandomForestClassifier(
+    n_estimators=300,
+    max_depth=10,
+    min_samples_split=5,
+    min_samples_leaf=2,
+    max_features="sqrt",
+    class_weight="balanced",
+    random_state=RANDOM_STATE,
+    n_jobs=-1
+)
+
+
+# Create an XGBoost boosting ensemble
+day4_xgboost = XGBClassifier(
+    n_estimators=300,
+    learning_rate=0.05,
+    max_depth=4,
+    min_child_weight=2,
+    subsample=0.80,
+    colsample_bytree=0.80,
+    scale_pos_weight=xgboost_class_weight,
+    objective="binary:logistic",
+    eval_metric="logloss",
+    random_state=RANDOM_STATE,
+    n_jobs=-1
+)
+
+
+# Create an engineered Random Forest pipeline without PCA
+day4_random_forest_without_pca = Pipeline(
+    steps=[
+        (
+            "feature_engineering",
+            clone(day4_feature_engineer)
+        ),
+        (
+            "preprocessor",
+            clone(day4_preprocessor)
+        ),
+        (
+            "classifier",
+            clone(day4_random_forest)
+        )
+    ]
+)
+
+
+# Create an engineered Random Forest pipeline with PCA
+day4_random_forest_with_pca = Pipeline(
+    steps=[
+        (
+            "feature_engineering",
+            clone(day4_feature_engineer)
+        ),
+        (
+            "preprocessor",
+            clone(day4_preprocessor)
+        ),
+        (
+            "pca",
+            clone(day4_pca)
+        ),
+        (
+            "classifier",
+            clone(day4_random_forest)
+        )
+    ]
+)
+
+
+# Create an engineered XGBoost pipeline without PCA
+day4_xgboost_without_pca = Pipeline(
+    steps=[
+        (
+            "feature_engineering",
+            clone(day4_feature_engineer)
+        ),
+        (
+            "preprocessor",
+            clone(day4_preprocessor)
+        ),
+        (
+            "classifier",
+            clone(day4_xgboost)
+        )
+    ]
+)
+
+
+# Create an engineered XGBoost pipeline with PCA
+day4_xgboost_with_pca = Pipeline(
+    steps=[
+        (
+            "feature_engineering",
+            clone(day4_feature_engineer)
+        ),
+        (
+            "preprocessor",
+            clone(day4_preprocessor)
+        ),
+        (
+            "pca",
+            clone(day4_pca)
+        ),
+        (
+            "classifier",
+            clone(day4_xgboost)
+        )
+    ]
+)
+
+
+# Compare Day 3 with the new Day 4 ensemble pipelines
+day4_candidates = {
+    "Day 3 Champion": clone(
+        day3_champion_model
+    ),
+
+    "Engineered Random Forest": (
+        day4_random_forest_without_pca
+    ),
+
+    "Engineered Random Forest with PCA": (
+        day4_random_forest_with_pca
+    ),
+
+    "Engineered XGBoost": (
+        day4_xgboost_without_pca
+    ),
+
+    "Engineered XGBoost with PCA": (
+        day4_xgboost_with_pca
+    )
+}
+
+
+# Create empty containers for fitted models and scores
+day4_trained_models = {}
+day4_results = []
+
+
+# Compare every candidate using the same cross-validation folds
+for model_name, candidate_pipeline in day4_candidates.items():
+
+    # Display the candidate currently being evaluated
+    print("\n================================")
+    print("DAY 4 EVALUATING")
+    print(model_name.upper())
+    print("================================")
+
+    # Calculate training and validation scores using cross-validation
+    day4_cv_scores = cross_validate(
+        estimator=candidate_pipeline,
+        X=X_train,
+        y=y_train,
+        scoring={
+            "accuracy": "accuracy",
+            "precision": "precision",
+            "recall": "recall",
+            "f1": "f1",
+            "roc_auc": "roc_auc"
+        },
+        cv=day3_cross_validation,
+        n_jobs=-1,
+        return_train_score=True
+    )
+
+    # Calculate the average training recall
+    day4_train_recall = (
+        day4_cv_scores[
+            "train_recall"
+        ].mean()
+    )
+
+    # Calculate the average validation accuracy
+    day4_validation_accuracy = (
+        day4_cv_scores[
+            "test_accuracy"
+        ].mean()
+    )
+
+    # Calculate the average validation precision
+    day4_validation_precision = (
+        day4_cv_scores[
+            "test_precision"
+        ].mean()
+    )
+
+    # Calculate the average validation recall
+    day4_validation_recall = (
+        day4_cv_scores[
+            "test_recall"
+        ].mean()
+    )
+
+    # Calculate the average validation F1 score
+    day4_validation_f1 = (
+        day4_cv_scores[
+            "test_f1"
+        ].mean()
+    )
+
+    # Calculate the average validation ROC-AUC
+    day4_validation_roc_auc = (
+        day4_cv_scores[
+            "test_roc_auc"
+        ].mean()
+    )
+
+    # Calculate the difference between training and validation recall
+    day4_recall_gap = (
+        day4_train_recall
+        - day4_validation_recall
+    )
+
+    # Give a simple bias and variance diagnosis
+    if (
+        day4_train_recall < 0.70
+        and day4_validation_recall < 0.70
+    ):
+        day4_diagnosis = (
+            "Possible underfitting or high bias"
+        )
+
+    elif day4_recall_gap > 0.10:
+        day4_diagnosis = (
+            "Possible overfitting or high variance"
+        )
+
+    else:
+        day4_diagnosis = (
+            "Training and validation scores are balanced"
+        )
+
+    # Fit the current candidate using all training rows
+    candidate_pipeline.fit(
+        X_train,
+        y_train
+    )
+
+    # Keep the fitted model so the winner can be saved later
+    day4_trained_models[
+        model_name
+    ] = candidate_pipeline
+
+    # Store all important validation results
+    day4_results.append(
+        {
+            "Model": model_name,
+            "Train Recall": day4_train_recall,
+            "Validation Accuracy": (
+                day4_validation_accuracy
+            ),
+            "Validation Precision": (
+                day4_validation_precision
+            ),
+            "Validation Recall": (
+                day4_validation_recall
+            ),
+            "Validation F1": (
+                day4_validation_f1
+            ),
+            "Validation ROC-AUC": (
+                day4_validation_roc_auc
+            ),
+            "Recall Gap": day4_recall_gap,
+            "Diagnosis": day4_diagnosis
+        }
+    )
+
+    # Display the current model's validation results
+    print(
+        f"Training recall     : "
+        f"{day4_train_recall:.4f}"
+    )
+
+    print(
+        f"Validation accuracy : "
+        f"{day4_validation_accuracy:.4f}"
+    )
+
+    print(
+        f"Validation precision: "
+        f"{day4_validation_precision:.4f}"
+    )
+
+    print(
+        f"Validation recall   : "
+        f"{day4_validation_recall:.4f}"
+    )
+
+    print(
+        f"Validation F1       : "
+        f"{day4_validation_f1:.4f}"
+    )
+
+    print(
+        f"Validation ROC-AUC  : "
+        f"{day4_validation_roc_auc:.4f}"
+    )
+
+    print(
+        f"Recall gap          : "
+        f"{day4_recall_gap:.4f}"
+    )
+
+    print(
+        "Diagnosis           :",
+        day4_diagnosis
+    )
+
+
+# Convert all Day 4 cross-validation results into a table
+day4_comparison = pd.DataFrame(
+    day4_results
+)
+
+
+# Rank candidates mainly using cross-validation recall
+day4_comparison = day4_comparison.sort_values(
+    by=[
+        "Validation Recall",
+        "Validation ROC-AUC",
+        "Validation F1"
+    ],
+    ascending=False
+).reset_index(drop=True)
+
+
+# Display the full Day 4 model comparison
+print("\n================================")
+print("DAY 4 MODEL COMPARISON")
+print("================================")
+
+print(
+    day4_comparison.to_string(
+        index=False,
+        float_format=lambda value: f"{value:.4f}"
+    )
+)
+
+
+# Select the candidate with the strongest validation performance
+day4_champion_name = day4_comparison.loc[
+    0,
+    "Model"
+]
+
+
+# Get the fitted pipeline belonging to the selected champion
+day4_champion_model = day4_trained_models[
+    day4_champion_name
+]
+
+
+# Use the selected champion to predict the untouched test customers
+day4_test_predictions = day4_champion_model.predict(
+    X_test
+)
+
+
+# Get the selected champion's probability predictions
+day4_test_probabilities = (
+    day4_champion_model.predict_proba(
+        X_test
+    )[:, 1]
+)
+
+
+# Calculate the final champion's test accuracy
+day4_test_accuracy = accuracy_score(
+    y_test,
+    day4_test_predictions
+)
+
+
+# Calculate the final champion's test precision
+day4_test_precision = precision_score(
+    y_test,
+    day4_test_predictions,
+    zero_division=0
+)
+
+
+# Calculate the final champion's test recall
+day4_test_recall = recall_score(
+    y_test,
+    day4_test_predictions,
+    zero_division=0
+)
+
+
+# Calculate the final champion's test F1 score
+day4_test_f1 = f1_score(
+    y_test,
+    day4_test_predictions,
+    zero_division=0
+)
+
+
+# Calculate the final champion's test ROC-AUC
+day4_test_roc_auc = roc_auc_score(
+    y_test,
+    day4_test_probabilities
+)
+
+
+# Display the final test results only after selecting the champion
+print("\n================================")
+print("DAY 4 FINAL CHAMPION")
+print("================================")
+
+print(
+    "Selected model:",
+    day4_champion_name
+)
+
+print(
+    "Selection basis: Highest cross-validation recall, "
+    "then ROC-AUC and F1."
+)
+
+print(
+    f"Test Accuracy : "
+    f"{day4_test_accuracy:.4f}"
+)
+
+print(
+    f"Test Precision: "
+    f"{day4_test_precision:.4f}"
+)
+
+print(
+    f"Test Recall   : "
+    f"{day4_test_recall:.4f}"
+)
+
+print(
+    f"Test F1       : "
+    f"{day4_test_f1:.4f}"
+)
+
+print(
+    f"Test ROC-AUC  : "
+    f"{day4_test_roc_auc:.4f}"
+)
+
+
+# Show correct and incorrect predictions for the final model
+print("\nConfusion Matrix:")
+
+print(
+    confusion_matrix(
+        y_test,
+        day4_test_predictions
+    )
+)
+
+
+# Show detailed results for stayed and exited customers
+print("\nClassification Report:")
+
+print(
+    classification_report(
+        y_test,
+        day4_test_predictions,
+        target_names=[
+            "Stayed",
+            "Exited"
+        ],
+        zero_division=0
+    )
+)
+
+
+# Create columns for final test results in the comparison table
+day4_comparison[
+    "Final Test Accuracy"
+] = np.nan
+
+day4_comparison[
+    "Final Test Precision"
+] = np.nan
+
+day4_comparison[
+    "Final Test Recall"
+] = np.nan
+
+day4_comparison[
+    "Final Test F1"
+] = np.nan
+
+day4_comparison[
+    "Final Test ROC-AUC"
+] = np.nan
+
+
+# Find the row belonging to the selected model
+day4_champion_row = (
+    day4_comparison["Model"]
+    == day4_champion_name
+)
+
+
+# Add final test results only to the selected champion's row
+day4_comparison.loc[
+    day4_champion_row,
+    "Final Test Accuracy"
+] = day4_test_accuracy
+
+day4_comparison.loc[
+    day4_champion_row,
+    "Final Test Precision"
+] = day4_test_precision
+
+day4_comparison.loc[
+    day4_champion_row,
+    "Final Test Recall"
+] = day4_test_recall
+
+day4_comparison.loc[
+    day4_champion_row,
+    "Final Test F1"
+] = day4_test_f1
+
+day4_comparison.loc[
+    day4_champion_row,
+    "Final Test ROC-AUC"
+] = day4_test_roc_auc
+
+
+# Choose a separate model filename so earlier models are not overwritten
+day4_model_path = (
+    MODEL_DIR
+    / "day4_production_churn_pipeline.joblib"
+)
+
+
+# Save the complete production pipeline
+joblib.dump(
+    day4_champion_model,
+    day4_model_path
+)
+
+
+# Choose the path for the Day 4 comparison report
+day4_report_path = (
+    REPORT_DIR
+    / "day4_model_comparison.csv"
+)
+
+
+# Save the full Day 4 comparison table
+day4_comparison.to_csv(
+    day4_report_path,
+    index=False
+)
+
+
+# Create a report explaining every engineered feature
+day4_feature_report = pd.DataFrame(
+    {
+        "Engineered Feature": [
+            "BalanceSalaryRatio",
+            "ProductsPerTenure",
+            "AgeTenureRatio",
+            "CreditScoreAgeRatio",
+            "ActiveWithBalance",
+            "HasZeroBalance",
+            "HasMultipleProducts",
+            "AgeProductInteraction",
+            "ActiveBalanceInteraction",
+            "AgeGroup"
+        ],
+
+        "Meaning": [
+            "Balance divided by estimated salary",
+            "Products divided by tenure plus one",
+            "Age divided by tenure plus one",
+            "Credit score divided by age",
+            "Customer is active and has a positive balance",
+            "Customer has a zero balance",
+            "Customer uses more than one product",
+            "Age multiplied by product count",
+            "Balance multiplied by active membership",
+            "Customer age category"
+        ]
+    }
+)
+
+
+# Choose the path for the engineered-feature report
+day4_feature_report_path = (
+    REPORT_DIR
+    / "day4_engineered_features.csv"
+)
+
+
+# Save the engineered-feature explanations
+day4_feature_report.to_csv(
+    day4_feature_report_path,
+    index=False
+)
+
+
+# Load the saved production model to verify the saved file
+day4_loaded_model = joblib.load(
+    day4_model_path
+)
+
+
+# Make predictions using the loaded model
+day4_loaded_predictions = (
+    day4_loaded_model.predict(
+        X_test
+    )
+)
+
+
+# Confirm that saving and loading did not change predictions
+day4_predictions_match = np.array_equal(
+    day4_test_predictions,
+    day4_loaded_predictions
+)
+
+
+# Display all saved Day 4 files
+print("\n================================")
+print("DAY 4 SAVED FILES")
+print("================================")
+
+print(
+    "Production model:",
+    day4_model_path
+)
+
+print(
+    "Comparison report:",
+    day4_report_path
+)
+
+print(
+    "Engineered-feature report:",
+    day4_feature_report_path
+)
+
+print(
+    "Predictions identical after reload:",
+    day4_predictions_match
 )
