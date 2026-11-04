@@ -357,3 +357,244 @@ print(
     round(sample_probability * 100, 2),
     "%"
 )
+
+# Import the three new models and clone so every model gets its own preprocessing pipeline
+from sklearn.base import clone
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+
+
+# Create the three models required for Day 2
+day2_model_choices = {
+    "Decision Tree": DecisionTreeClassifier(
+        random_state=RANDOM_STATE,
+        class_weight="balanced"
+    ),
+
+    "Random Forest": RandomForestClassifier(
+        n_estimators=200,
+        random_state=RANDOM_STATE,
+        class_weight="balanced",
+        n_jobs=-1
+    ),
+
+    "SVM": SVC(
+        kernel="rbf",
+        probability=True,
+        class_weight="balanced",
+        random_state=RANDOM_STATE
+    )
+}
+
+
+# Create empty containers for the model results and trained pipelines
+day2_results = []
+day2_trained_models = {}
+
+
+# Train and test all three models using the same training and testing data
+for model_name, classifier in day2_model_choices.items():
+
+    # Create a separate preprocessing and model pipeline for the current algorithm
+    current_pipeline = Pipeline(
+        steps=[
+            (
+                "preprocessor",
+                clone(preprocessor)
+            ),
+            (
+                "classifier",
+                classifier
+            )
+        ]
+    )
+
+    # Train the complete pipeline using the Day 1 training data
+    current_pipeline.fit(
+        X_train,
+        y_train
+    )
+
+    # Predict whether every test customer stayed or exited
+    current_predictions = current_pipeline.predict(
+        X_test
+    )
+
+    # Calculate the probability that every test customer exited
+    current_probabilities = current_pipeline.predict_proba(
+        X_test
+    )[:, 1]
+
+    # Calculate the accuracy of the current model
+    current_accuracy = accuracy_score(
+        y_test,
+        current_predictions
+    )
+
+    # Calculate the precision for customers predicted to exit
+    current_precision = precision_score(
+        y_test,
+        current_predictions,
+        zero_division=0
+    )
+
+    # Calculate how many actual exiting customers the model found
+    current_recall = recall_score(
+        y_test,
+        current_predictions,
+        zero_division=0
+    )
+
+    # Calculate a combined score using precision and recall
+    current_f1 = f1_score(
+        y_test,
+        current_predictions,
+        zero_division=0
+    )
+
+    # Calculate how well the model separates stayed and exited customers
+    current_roc_auc = roc_auc_score(
+        y_test,
+        current_probabilities
+    )
+
+    # Keep the trained pipeline so the winning model can be saved
+    day2_trained_models[
+        model_name
+    ] = current_pipeline
+
+    # Store the current model's scores in a list
+    day2_results.append(
+        {
+            "Model": model_name,
+            "Accuracy": current_accuracy,
+            "Precision": current_precision,
+            "Recall": current_recall,
+            "F1 Score": current_f1,
+            "ROC-AUC": current_roc_auc
+        }
+    )
+
+    # Display the current model's results
+    print("\n================================")
+    print("DAY 2:", model_name.upper())
+    print("================================")
+
+    print(f"Accuracy : {current_accuracy:.4f}")
+    print(f"Precision: {current_precision:.4f}")
+    print(f"Recall   : {current_recall:.4f}")
+    print(f"F1 Score : {current_f1:.4f}")
+    print(f"ROC-AUC  : {current_roc_auc:.4f}")
+
+    # Show correct and incorrect predictions for the current model
+    print("\nConfusion Matrix:")
+
+    print(
+        confusion_matrix(
+            y_test,
+            current_predictions
+        )
+    )
+
+    # Show detailed results for stayed and exited customers
+    print("\nClassification Report:")
+
+    print(
+        classification_report(
+            y_test,
+            current_predictions,
+            target_names=[
+                "Stayed",
+                "Exited"
+            ],
+            zero_division=0
+        )
+    )
+
+
+# Convert the Day 2 results into a comparison table
+day2_comparison = pd.DataFrame(
+    day2_results
+)
+
+
+# Rank models mainly by recall because finding exiting customers is the priority
+day2_comparison = day2_comparison.sort_values(
+    by=[
+        "Recall",
+        "ROC-AUC",
+        "F1 Score"
+    ],
+    ascending=False
+).reset_index(drop=True)
+
+
+# Display the complete Day 2 comparison table
+print("\n================================")
+print("DAY 2 MODEL COMPARISON")
+print("================================")
+
+print(
+    day2_comparison.to_string(
+        index=False,
+        float_format=lambda value: f"{value:.4f}"
+    )
+)
+
+
+# Select the first model after sorting by recall
+day2_champion_name = day2_comparison.loc[
+    0,
+    "Model"
+]
+
+
+# Get the trained pipeline belonging to the Day 2 winner
+day2_champion_model = day2_trained_models[
+    day2_champion_name
+]
+
+
+# Choose a separate filename so the Day 1 model is not overwritten
+day2_champion_path = (
+    MODEL_DIR
+    / "day2_champion_pipeline.joblib"
+)
+
+
+# Save the complete Day 2 champion pipeline
+joblib.dump(
+    day2_champion_model,
+    day2_champion_path
+)
+
+
+# Choose a location for the Day 2 comparison report
+day2_report_path = (
+    REPORT_DIR
+    / "day2_model_comparison.csv"
+)
+
+
+# Save the comparison table as a CSV file
+day2_comparison.to_csv(
+    day2_report_path,
+    index=False
+)
+
+
+# Display the selected Day 2 winner and saved files
+print("\n================================")
+print("DAY 2 CHAMPION")
+print("================================")
+
+print("Selected model:", day2_champion_name)
+
+print(
+    "Reason: The model had the highest recall, "
+    "with ROC-AUC and F1 Score used to break ties."
+)
+
+print("Model saved at:", day2_champion_path)
+print("Report saved at:", day2_report_path)
