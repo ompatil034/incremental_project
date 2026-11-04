@@ -598,3 +598,550 @@ print(
 
 print("Model saved at:", day2_champion_path)
 print("Report saved at:", day2_report_path)
+
+
+# Import GridSearchCV, cross-validation, and learning-curve tools for Day 3
+from sklearn.model_selection import (
+    GridSearchCV,
+    StratifiedKFold,
+    learning_curve
+)
+
+
+# Create five balanced folds so every model uses the same cross-validation process
+day3_cross_validation = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=RANDOM_STATE
+)
+
+
+# Create fresh model objects that GridSearchCV will tune
+day3_candidate_models = {
+    "Decision Tree": DecisionTreeClassifier(
+        random_state=RANDOM_STATE
+    ),
+
+    "Random Forest": RandomForestClassifier(
+        random_state=RANDOM_STATE,
+        n_jobs=-1
+    ),
+
+    "SVM": SVC(
+        probability=True,
+        random_state=RANDOM_STATE
+    )
+}
+
+
+# Define the Decision Tree settings that GridSearchCV will test
+day3_decision_tree_grid = {
+    "classifier__max_depth": [
+        3,
+        5,
+        8,
+        None
+    ],
+
+    "classifier__min_samples_split": [
+        2,
+        5,
+        10
+    ],
+
+    "classifier__min_samples_leaf": [
+        1,
+        5,
+        10
+    ],
+
+    "classifier__class_weight": [
+        None,
+        "balanced"
+    ]
+}
+
+
+# Define the Random Forest settings that GridSearchCV will test
+day3_random_forest_grid = {
+    "classifier__n_estimators": [
+        100,
+        200
+    ],
+
+    "classifier__max_depth": [
+        None,
+        6,
+        10
+    ],
+
+    "classifier__min_samples_split": [
+        2,
+        5
+    ],
+
+    "classifier__min_samples_leaf": [
+        1,
+        3
+    ],
+
+    "classifier__class_weight": [
+        None,
+        "balanced"
+    ]
+}
+
+
+# Define the SVM settings that GridSearchCV will test
+day3_svm_grid = {
+    "classifier__C": [
+        0.1,
+        1,
+        10
+    ],
+
+    "classifier__kernel": [
+        "linear",
+        "rbf"
+    ],
+
+    "classifier__gamma": [
+        "scale",
+        "auto"
+    ],
+
+    "classifier__class_weight": [
+        None,
+        "balanced"
+    ]
+}
+
+
+# Connect every candidate model with its correct search settings
+day3_parameter_grids = {
+    "Decision Tree": day3_decision_tree_grid,
+    "Random Forest": day3_random_forest_grid,
+    "SVM": day3_svm_grid
+}
+
+
+# Create empty containers for tuned models and their results
+day3_tuned_models = {}
+day3_results = []
+
+
+# Tune all three models using only the training data
+for model_name, classifier in day3_candidate_models.items():
+
+    # Display the model that GridSearchCV is currently tuning
+    print("\n================================")
+    print("DAY 3 TUNING:", model_name.upper())
+    print("================================")
+
+    # Create a fresh preprocessing and model pipeline
+    search_pipeline = Pipeline(
+        steps=[
+            (
+                "preprocessor",
+                clone(preprocessor)
+            ),
+            (
+                "classifier",
+                classifier
+            )
+        ]
+    )
+
+    # Try every parameter combination and select the best recall score
+    grid_search = GridSearchCV(
+        estimator=search_pipeline,
+        param_grid=day3_parameter_grids[
+            model_name
+        ],
+        scoring="recall",
+        cv=day3_cross_validation,
+        n_jobs=-1,
+        return_train_score=True,
+        refit=True
+    )
+
+    # Run parameter tuning using only the training data
+    grid_search.fit(
+        X_train,
+        y_train
+    )
+
+    # Get the best complete pipeline found for the current model
+    best_model = grid_search.best_estimator_
+
+    # Store the tuned pipeline for later champion selection
+    day3_tuned_models[
+        model_name
+    ] = best_model
+
+    # Find the result position of the best parameter combination
+    best_position = grid_search.best_index_
+
+    # Read the average training recall of the best parameter combination
+    mean_train_recall = grid_search.cv_results_[
+        "mean_train_score"
+    ][best_position]
+
+    # Read the average validation recall of the best parameter combination
+    mean_validation_recall = grid_search.cv_results_[
+        "mean_test_score"
+    ][best_position]
+
+    # Calculate the difference between training and validation recall
+    train_validation_gap = (
+        mean_train_recall
+        - mean_validation_recall
+    )
+
+    # Give a simple diagnosis using the training and validation scores
+    if (
+        mean_train_recall < 0.70
+        and mean_validation_recall < 0.70
+    ):
+        diagnosis = (
+            "Possible underfitting or high bias"
+        )
+
+    elif train_validation_gap > 0.10:
+        diagnosis = (
+            "Possible overfitting or high variance"
+        )
+
+    else:
+        diagnosis = (
+            "Training and validation scores are balanced"
+        )
+
+    # Predict the classes of the final test customers
+    tuned_predictions = best_model.predict(
+        X_test
+    )
+
+    # Calculate exit probabilities for the final test customers
+    tuned_probabilities = best_model.predict_proba(
+        X_test
+    )[:, 1]
+
+    # Calculate the final test accuracy
+    tuned_accuracy = accuracy_score(
+        y_test,
+        tuned_predictions
+    )
+
+    # Calculate the final test precision
+    tuned_precision = precision_score(
+        y_test,
+        tuned_predictions,
+        zero_division=0
+    )
+
+    # Calculate the final test recall
+    tuned_recall = recall_score(
+        y_test,
+        tuned_predictions,
+        zero_division=0
+    )
+
+    # Calculate the final test F1 score
+    tuned_f1 = f1_score(
+        y_test,
+        tuned_predictions,
+        zero_division=0
+    )
+
+    # Calculate the final test ROC-AUC
+    tuned_roc_auc = roc_auc_score(
+        y_test,
+        tuned_probabilities
+    )
+
+    # Store the tuning and final test information
+    day3_results.append(
+        {
+            "Model": model_name,
+            "Train Recall": mean_train_recall,
+            "Validation Recall": (
+                mean_validation_recall
+            ),
+            "Recall Gap": train_validation_gap,
+            "Test Accuracy": tuned_accuracy,
+            "Test Precision": tuned_precision,
+            "Test Recall": tuned_recall,
+            "Test F1": tuned_f1,
+            "Test ROC-AUC": tuned_roc_auc,
+            "Diagnosis": diagnosis,
+            "Best Parameters": str(
+                grid_search.best_params_
+            )
+        }
+    )
+
+    # Display the settings and scores found by GridSearchCV
+    print("\nBest parameters:")
+    print(grid_search.best_params_)
+
+    print(
+        f"\nTraining recall  : "
+        f"{mean_train_recall:.4f}"
+    )
+
+    print(
+        f"Validation recall: "
+        f"{mean_validation_recall:.4f}"
+    )
+
+    print(
+        f"Recall gap       : "
+        f"{train_validation_gap:.4f}"
+    )
+
+    print("Diagnosis        :", diagnosis)
+
+    print(
+        f"\nTest accuracy : "
+        f"{tuned_accuracy:.4f}"
+    )
+
+    print(
+        f"Test precision: "
+        f"{tuned_precision:.4f}"
+    )
+
+    print(
+        f"Test recall   : "
+        f"{tuned_recall:.4f}"
+    )
+
+    print(
+        f"Test F1       : "
+        f"{tuned_f1:.4f}"
+    )
+
+    print(
+        f"Test ROC-AUC  : "
+        f"{tuned_roc_auc:.4f}"
+    )
+
+    # Display the correct and incorrect final test predictions
+    print("\nConfusion Matrix:")
+
+    print(
+        confusion_matrix(
+            y_test,
+            tuned_predictions
+        )
+    )
+
+
+# Convert all Day 3 tuning results into a comparison table
+day3_comparison = pd.DataFrame(
+    day3_results
+)
+
+
+# Select the champion using validation recall instead of test recall
+day3_comparison = day3_comparison.sort_values(
+    by=[
+        "Validation Recall",
+        "Test ROC-AUC",
+        "Test F1"
+    ],
+    ascending=False
+).reset_index(drop=True)
+
+
+# Display the complete Day 3 comparison
+print("\n================================")
+print("DAY 3 TUNED MODEL COMPARISON")
+print("================================")
+
+day3_display_columns = [
+    "Model",
+    "Train Recall",
+    "Validation Recall",
+    "Recall Gap",
+    "Test Accuracy",
+    "Test Precision",
+    "Test Recall",
+    "Test F1",
+    "Test ROC-AUC",
+    "Diagnosis"
+]
+
+print(
+    day3_comparison[
+        day3_display_columns
+    ].to_string(
+        index=False,
+        float_format=lambda value: f"{value:.4f}"
+    )
+)
+
+
+# Get the name of the model with the strongest validation recall
+day3_champion_name = day3_comparison.loc[
+    0,
+    "Model"
+]
+
+
+# Get the complete tuned pipeline belonging to the champion
+day3_champion_model = day3_tuned_models[
+    day3_champion_name
+]
+
+
+# Create learning-curve scores using increasing amounts of training data
+training_sizes, training_scores, validation_scores = learning_curve(
+    estimator=day3_champion_model,
+    X=X_train,
+    y=y_train,
+    train_sizes=[
+        0.20,
+        0.40,
+        0.60,
+        0.80,
+        1.00
+    ],
+    cv=day3_cross_validation,
+    scoring="recall",
+    n_jobs=-1,
+    shuffle=True,
+    random_state=RANDOM_STATE
+)
+
+
+# Calculate the average training recall for every data size
+mean_learning_train_scores = (
+    training_scores.mean(axis=1)
+)
+
+
+# Calculate the average validation recall for every data size
+mean_learning_validation_scores = (
+    validation_scores.mean(axis=1)
+)
+
+
+# Store the learning-curve values in a table
+day3_learning_curve = pd.DataFrame(
+    {
+        "Training Examples": training_sizes,
+        "Mean Training Recall": (
+            mean_learning_train_scores
+        ),
+        "Mean Validation Recall": (
+            mean_learning_validation_scores
+        )
+    }
+)
+
+
+# Display how performance changes when more training data is used
+print("\n================================")
+print("DAY 3 CHAMPION LEARNING CURVE")
+print("================================")
+
+print(
+    day3_learning_curve.to_string(
+        index=False,
+        float_format=lambda value: f"{value:.4f}"
+    )
+)
+
+
+# Choose a separate path so earlier model versions remain unchanged
+day3_champion_path = (
+    MODEL_DIR
+    / "day3_tuned_champion.joblib"
+)
+
+
+# Save the complete tuned champion pipeline
+joblib.dump(
+    day3_champion_model,
+    day3_champion_path
+)
+
+
+# Choose a location for the Day 3 comparison report
+day3_report_path = (
+    REPORT_DIR
+    / "day3_tuning_comparison.csv"
+)
+
+
+# Save the Day 3 tuning comparison
+day3_comparison.to_csv(
+    day3_report_path,
+    index=False
+)
+
+
+# Choose a location for the learning-curve results
+day3_learning_curve_path = (
+    REPORT_DIR
+    / "day3_learning_curve.csv"
+)
+
+
+# Save the learning-curve values
+day3_learning_curve.to_csv(
+    day3_learning_curve_path,
+    index=False
+)
+
+
+# Display the final Day 3 champion and its important information
+print("\n================================")
+print("DAY 3 CHAMPION")
+print("================================")
+
+print("Selected model:", day3_champion_name)
+
+print(
+    "Validation recall:",
+    round(
+        day3_comparison.loc[
+            0,
+            "Validation Recall"
+        ],
+        4
+    )
+)
+
+print(
+    "Best parameters:",
+    day3_comparison.loc[
+        0,
+        "Best Parameters"
+    ]
+)
+
+print(
+    "Bias-variance diagnosis:",
+    day3_comparison.loc[
+        0,
+        "Diagnosis"
+    ]
+)
+
+print(
+    "Model saved at:",
+    day3_champion_path
+)
+
+print(
+    "Comparison saved at:",
+    day3_report_path
+)
+
+print(
+    "Learning curve saved at:",
+    day3_learning_curve_path
+)
