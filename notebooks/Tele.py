@@ -1,130 +1,138 @@
-# Import libraries needed to work with data, train the model, test it, and save it
-import os
-import pandas as pd
-import joblib
+# Import libraries for reading data, training the model, checking results, and saving the model
+from pathlib import Path
 
-from sklearn.model_selection import train_test_split
+import joblib
+import pandas as pd
+
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
+    f1_score,
     roc_auc_score,
     confusion_matrix,
     classification_report
 )
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
-# Read the customer churn CSV file
-df = pd.read_csv("data/churn.csv")
+# Use the same random value every time so the train-test split stays the same
+RANDOM_STATE = 42
 
 
-# Show the first 5 rows of the dataset
+# Find the main RetailMind project folder automatically
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+# Create the paths for the dataset, model folder, and report folder
+DATA_PATH = PROJECT_ROOT / "data" / "churn.csv"
+MODEL_DIR = PROJECT_ROOT / "models"
+REPORT_DIR = PROJECT_ROOT / "reports"
+
+
+# Create the model and report folders if they do not already exist
+MODEL_DIR.mkdir(exist_ok=True)
+REPORT_DIR.mkdir(exist_ok=True)
+
+
+# Read the bank customer churn dataset
+df = pd.read_csv(DATA_PATH)
+
+
+# Show basic information about the dataset
 print("\nFirst 5 rows:")
 print(df.head())
 
-
-# Show the number of rows and columns
 print("\nDataset shape:")
 print(df.shape)
 
-
-# Show all column names
 print("\nColumn names:")
 print(df.columns.tolist())
 
-
-# Show information about each column
-print("\nDataset information:")
-df.info()
-
-
-# Check how many missing values are present in each column
 print("\nMissing values:")
 print(df.isnull().sum())
 
-
-# Check how many duplicate rows are present
 print("\nDuplicate rows:")
 print(df.duplicated().sum())
 
 
-# Remove duplicate rows
+# Remove completely duplicate rows
 df = df.drop_duplicates()
 
 
-# Show how many customers stayed (0) and exited (1)
-print("\nExited counts:")
+# Check that the target column exists
+if "Exited" not in df.columns:
+    raise ValueError("The dataset must contain a column named Exited.")
+
+
+# Show how many customers stayed and exited
+print("\nTarget counts:")
 print(df["Exited"].value_counts())
 
-
-# Show the percentage of customers who stayed and exited
-print("\nExited percentages:")
+print("\nTarget percentages:")
 print(df["Exited"].value_counts(normalize=True) * 100)
 
 
-# X contains the customer information that will be used to make predictions
-X = df.drop(
-    columns=[
+# Remove identifiers and the answer column from the model inputs
+columns_to_remove = [
+    column
+    for column in [
+        "RowNumber",
         "CustomerId",
         "Surname",
         "Exited"
     ]
-)
+    if column in df.columns
+]
+
+X = df.drop(columns=columns_to_remove)
 
 
-# y contains the answer we want the model to predict
-y = df["Exited"]
+# Store the answer that the model needs to predict
+y = df["Exited"].astype(int)
 
 
-# Show the columns that will actually be used for training
-print("\nFeatures used for training:")
-print(X.columns.tolist())
-
-
-# Use 80% of the data for training and 20% for testing
+# Split the data before fitting any preprocessing steps
 X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
     test_size=0.20,
-    random_state=42,
+    random_state=RANDOM_STATE,
     stratify=y
 )
 
 
-# Show how many rows are being used for training and testing
+# Show the size of the training and testing data
 print("\nTraining rows:", len(X_train))
 print("Testing rows:", len(X_test))
 
 
-# Find all columns that contain numbers
-numerical_columns = X.select_dtypes(
+# Find numerical columns using only the training data
+numerical_columns = X_train.select_dtypes(
     include=["number"]
 ).columns.tolist()
 
 
-# Find all columns that contain text
-categorical_columns = X.select_dtypes(
-    include=["object"]
+# Find text columns using only the training data
+categorical_columns = X_train.select_dtypes(
+    exclude=["number"]
 ).columns.tolist()
 
 
-# Show the numerical columns
+# Show the columns found in each group
 print("\nNumerical columns:")
 print(numerical_columns)
 
-
-# Show the categorical columns
 print("\nCategorical columns:")
 print(categorical_columns)
 
 
-# Fill missing numbers with the median and standardize their values
+# Fill missing numerical values and standardize numerical columns
 numerical_pipeline = Pipeline(
     steps=[
         (
@@ -139,7 +147,7 @@ numerical_pipeline = Pipeline(
 )
 
 
-# Fill missing text values and convert text categories into numbers
+# Fill missing text values and convert categories into numerical columns
 categorical_pipeline = Pipeline(
     steps=[
         (
@@ -154,7 +162,7 @@ categorical_pipeline = Pipeline(
 )
 
 
-# Apply the correct preprocessing to numerical and categorical columns
+# Apply the correct preprocessing to numerical and text columns
 preprocessor = ColumnTransformer(
     transformers=[
         (
@@ -171,7 +179,7 @@ preprocessor = ColumnTransformer(
 )
 
 
-# Create one pipeline that preprocesses the data and then uses Logistic Regression
+# Create one pipeline containing preprocessing and Logistic Regression
 model = Pipeline(
     steps=[
         (
@@ -182,79 +190,70 @@ model = Pipeline(
             "classifier",
             LogisticRegression(
                 max_iter=1000,
-                random_state=42
+                random_state=RANDOM_STATE
             )
         )
     ]
 )
 
 
-# Train the model using the training data
+# Train the complete pipeline using only the training data
 model.fit(X_train, y_train)
 
-print("\nModel trained successfully!")
 
-
-# Predict whether each customer in the test data stayed or exited
+# Predict the class of every customer in the test data
 y_pred = model.predict(X_test)
 
 
-# Find the predicted exit probability for each test customer
+# Predict the exit probability of every customer in the test data
 y_probability = model.predict_proba(X_test)[:, 1]
 
 
-# Calculate the percentage of total predictions that were correct
-accuracy = accuracy_score(
-    y_test,
-    y_pred
-)
+# Calculate the main model evaluation scores
+accuracy = accuracy_score(y_test, y_pred)
 
-
-# Calculate how often an exit prediction was actually correct
 precision = precision_score(
     y_test,
     y_pred,
     zero_division=0
 )
 
-
-# Calculate how many actual exiting customers the model found
 recall = recall_score(
     y_test,
     y_pred,
     zero_division=0
 )
 
+f1 = f1_score(
+    y_test,
+    y_pred,
+    zero_division=0
+)
 
-# Calculate how well the model separates exiting and staying customers
 roc_auc = roc_auc_score(
     y_test,
     y_probability
 )
 
 
-# Display the main Day 1 model results
-print("\n==============================")
-print("DAY 1 BASELINE MODEL RESULTS")
-print("==============================")
+# Display the Day 1 baseline results
+print("\n================================")
+print("DAY 1 LOGISTIC REGRESSION")
+print("================================")
 
 print(f"Accuracy : {accuracy:.4f}")
 print(f"Precision: {precision:.4f}")
 print(f"Recall   : {recall:.4f}")
+print(f"F1 Score : {f1:.4f}")
 print(f"ROC-AUC  : {roc_auc:.4f}")
 
 
-# Show the numbers of correct and incorrect predictions
+# Show the correct and incorrect prediction counts
 print("\nConfusion Matrix:")
-print(
-    confusion_matrix(
-        y_test,
-        y_pred
-    )
-)
+print(confusion_matrix(y_test, y_pred))
 
 
-# Show detailed precision, recall and F1-score results
+# Show detailed results for stayed and exited customers
 print("\nClassification Report:")
 print(
     classification_report(
@@ -269,34 +268,49 @@ print(
 )
 
 
-# Create the models folder if it does not exist
-os.makedirs(
-    "models",
-    exist_ok=True
+# Save the Day 1 results as a CSV report
+day1_results = pd.DataFrame(
+    [
+        {
+            "Model": "Logistic Regression",
+            "Accuracy": accuracy,
+            "Precision": precision,
+            "Recall": recall,
+            "F1 Score": f1,
+            "ROC-AUC": roc_auc
+        }
+    ]
+)
+
+day1_results.to_csv(
+    REPORT_DIR / "day1_results.csv",
+    index=False
 )
 
 
-# Choose the location where the trained model will be saved
-model_path = "models/day1_churn_pipeline.joblib"
+# Save the complete Day 1 pipeline in a separate model file
+model_path = MODEL_DIR / "day1_logistic_pipeline.joblib"
 
-
-# Save the complete trained pipeline
 joblib.dump(
     model,
     model_path
 )
 
-print("\nModel saved successfully!")
-print("Saved at:", model_path)
+
+# Load the model again to verify that the saved file works
+loaded_model = joblib.load(model_path)
 
 
-# Load the saved model to make sure the file works
-loaded_model = joblib.load(
-    model_path
-)
+# Confirm that the loaded model gives the same predictions
+same_predictions = (
+    loaded_model.predict(X_test) == y_pred
+).all()
+
+print("\nModel saved at:", model_path)
+print("Saved model works correctly:", same_predictions)
 
 
-# Create one example customer for testing our model
+# Create one example customer for checking the saved model
 sample_customer = pd.DataFrame(
     [
         {
@@ -315,30 +329,28 @@ sample_customer = pd.DataFrame(
 )
 
 
-# Predict whether the example customer will stay or exit
+# Predict whether the example customer may exit
 sample_prediction = loaded_model.predict(
     sample_customer
 )[0]
 
 
-# Find the predicted probability that the example customer will exit
+# Find the predicted exit probability for the example customer
 sample_probability = loaded_model.predict_proba(
     sample_customer
 )[0][1]
 
-# Convert the 0 or 1 prediction into simple text
-if sample_prediction == 1:
-    prediction_text = "Customer may exit"
-else:
-    prediction_text = "Customer may stay"
+
+# Convert the numerical prediction into simple text
+prediction_text = (
+    "Customer may exit"
+    if sample_prediction == 1
+    else "Customer may stay"
+)
 
 
-# Show the final prediction for our example customer
-print("\n==============================")
-print("SAMPLE CUSTOMER PREDICTION")
-print("==============================")
-
-print("Prediction:", prediction_text)
+# Display the example prediction
+print("\nSample prediction:", prediction_text)
 
 print(
     "Exit probability:",
