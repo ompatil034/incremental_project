@@ -2054,3 +2054,864 @@ print(
     "Predictions identical after reload:",
     day4_predictions_match
 )
+
+
+# Import TensorFlow and Keras tools needed to build and train the neural network
+try:
+    import tensorflow as tf
+
+    from tensorflow.keras.callbacks import EarlyStopping
+    from tensorflow.keras.layers import Dense, Dropout, Input
+    from tensorflow.keras.models import Sequential
+
+except ImportError:
+    raise ImportError(
+        "TensorFlow is not installed. "
+        "Run: python -m pip install tensorflow"
+    )
+
+
+# Set random values so the ANN results are more reproducible
+np.random.seed(RANDOM_STATE)
+tf.random.set_seed(RANDOM_STATE)
+
+
+# Display the installed TensorFlow version
+print("\n================================")
+print("DAY 5: KERAS ANN")
+print("================================")
+
+print("TensorFlow version:", tf.__version__)
+
+
+# Split the existing training data into ANN training and validation parts
+X_ann_train, X_ann_validation, y_ann_train, y_ann_validation = (
+    train_test_split(
+        X_train,
+        y_train,
+        test_size=0.20,
+        random_state=RANDOM_STATE,
+        stratify=y_train
+    )
+)
+
+
+# Create a fresh copy of the Day 1 preprocessing pipeline for the ANN
+day5_preprocessor = clone(
+    preprocessor
+)
+
+
+# Learn preprocessing values using only the ANN training data
+X_ann_train_processed = (
+    day5_preprocessor.fit_transform(
+        X_ann_train
+    )
+)
+
+
+# Apply the learned preprocessing to the ANN validation data
+X_ann_validation_processed = (
+    day5_preprocessor.transform(
+        X_ann_validation
+    )
+)
+
+
+# Apply the same learned preprocessing to the untouched test data
+X_ann_test_processed = (
+    day5_preprocessor.transform(
+        X_test
+    )
+)
+
+
+# Convert sparse matrices into normal arrays when necessary
+if hasattr(
+    X_ann_train_processed,
+    "toarray"
+):
+    X_ann_train_processed = (
+        X_ann_train_processed.toarray()
+    )
+
+
+# Convert the validation data into a normal array when necessary
+if hasattr(
+    X_ann_validation_processed,
+    "toarray"
+):
+    X_ann_validation_processed = (
+        X_ann_validation_processed.toarray()
+    )
+
+
+# Convert the test data into a normal array when necessary
+if hasattr(
+    X_ann_test_processed,
+    "toarray"
+):
+    X_ann_test_processed = (
+        X_ann_test_processed.toarray()
+    )
+
+
+# Convert all ANN inputs to float32 because TensorFlow works efficiently with this type
+X_ann_train_processed = (
+    X_ann_train_processed.astype(
+        "float32"
+    )
+)
+
+X_ann_validation_processed = (
+    X_ann_validation_processed.astype(
+        "float32"
+    )
+)
+
+X_ann_test_processed = (
+    X_ann_test_processed.astype(
+        "float32"
+    )
+)
+
+
+# Convert the answers into float32 values for TensorFlow
+y_ann_train_array = (
+    y_ann_train.to_numpy().astype(
+        "float32"
+    )
+)
+
+y_ann_validation_array = (
+    y_ann_validation.to_numpy().astype(
+        "float32"
+    )
+)
+
+y_ann_test_array = (
+    y_test.to_numpy().astype(
+        "float32"
+    )
+)
+
+
+# Count how many processed input features enter the neural network
+number_of_ann_features = (
+    X_ann_train_processed.shape[1]
+)
+
+
+# Display the ANN data shapes
+print(
+    "\nANN training shape:",
+    X_ann_train_processed.shape
+)
+
+print(
+    "ANN validation shape:",
+    X_ann_validation_processed.shape
+)
+
+print(
+    "ANN testing shape:",
+    X_ann_test_processed.shape
+)
+
+print(
+    "Number of ANN input features:",
+    number_of_ann_features
+)
+
+
+# Build a small feed-forward neural network for customer churn
+day5_ann_model = Sequential(
+    [
+        # Accept one processed value for every input feature
+        Input(
+            shape=(
+                number_of_ann_features,
+            )
+        ),
+
+        # Learn the first set of customer patterns using 64 neurons
+        Dense(
+            units=64,
+            activation="relu"
+        ),
+
+        # Randomly disable some neurons during training to reduce overfitting
+        Dropout(
+            rate=0.30
+        ),
+
+        # Learn deeper patterns using 32 neurons
+        Dense(
+            units=32,
+            activation="relu"
+        ),
+
+        # Apply another smaller dropout step
+        Dropout(
+            rate=0.20
+        ),
+
+        # Learn a smaller final hidden representation
+        Dense(
+            units=16,
+            activation="relu"
+        ),
+
+        # Return one probability between 0 and 1 for customer exit
+        Dense(
+            units=1,
+            activation="sigmoid"
+        )
+    ]
+)
+
+
+# Configure how the ANN learns and which metrics it records
+day5_ann_model.compile(
+    optimizer="adam",
+    loss="binary_crossentropy",
+    metrics=[
+        "accuracy",
+        tf.keras.metrics.Precision(
+            name="precision"
+        ),
+        tf.keras.metrics.Recall(
+            name="recall"
+        ),
+        tf.keras.metrics.AUC(
+            name="auc"
+        )
+    ]
+)
+
+
+# Display the neural network layers and parameter counts
+print("\nANN model structure:")
+
+day5_ann_model.summary()
+
+
+# Calculate a larger weight for exited customers because the target is imbalanced
+day5_stayed_count = int(
+    (
+        y_ann_train == 0
+    ).sum()
+)
+
+day5_exited_count = int(
+    (
+        y_ann_train == 1
+    ).sum()
+)
+
+
+# Create balanced class weights for ANN training
+day5_total_count = (
+    day5_stayed_count
+    + day5_exited_count
+)
+
+day5_class_weights = {
+    0: (
+        day5_total_count
+        / (
+            2
+            * day5_stayed_count
+        )
+    ),
+
+    1: (
+        day5_total_count
+        / (
+            2
+            * day5_exited_count
+        )
+    )
+}
+
+
+# Display the importance given to both target classes
+print(
+    "\nANN class weights:",
+    day5_class_weights
+)
+
+
+# Stop training when validation loss stops improving
+day5_early_stopping = EarlyStopping(
+    monitor="val_loss",
+    patience=10,
+    min_delta=0.001,
+    restore_best_weights=True,
+    verbose=1
+)
+
+
+# Train the ANN while checking validation loss after every epoch
+day5_history = day5_ann_model.fit(
+    X_ann_train_processed,
+    y_ann_train_array,
+    validation_data=(
+        X_ann_validation_processed,
+        y_ann_validation_array
+    ),
+    epochs=100,
+    batch_size=32,
+    class_weight=day5_class_weights,
+    callbacks=[
+        day5_early_stopping
+    ],
+    verbose=1
+)
+
+
+# Count how many epochs were completed before early stopping
+day5_epochs_completed = len(
+    day5_history.history[
+        "loss"
+    ]
+)
+
+
+# Find the epoch with the smallest validation loss
+day5_best_epoch = (
+    int(
+        np.argmin(
+            day5_history.history[
+                "val_loss"
+            ]
+        )
+    )
+    + 1
+)
+
+
+# Display the early-stopping results
+print("\n================================")
+print("DAY 5 TRAINING SUMMARY")
+print("================================")
+
+print(
+    "Epochs completed:",
+    day5_epochs_completed
+)
+
+print(
+    "Best epoch:",
+    day5_best_epoch
+)
+
+print(
+    "Best validation loss:",
+    round(
+        min(
+            day5_history.history[
+                "val_loss"
+            ]
+        ),
+        4
+    )
+)
+
+
+# Predict the exit probability for every untouched test customer
+day5_ann_probabilities = (
+    day5_ann_model.predict(
+        X_ann_test_processed,
+        verbose=0
+    )
+    .reshape(-1)
+)
+
+
+# Convert probabilities of at least 0.5 into class 1 predictions
+day5_ann_predictions = (
+    day5_ann_probabilities >= 0.50
+).astype(int)
+
+
+# Calculate the ANN test accuracy
+day5_ann_accuracy = accuracy_score(
+    y_test,
+    day5_ann_predictions
+)
+
+
+# Calculate the ANN test precision
+day5_ann_precision = precision_score(
+    y_test,
+    day5_ann_predictions,
+    zero_division=0
+)
+
+
+# Calculate the ANN test recall
+day5_ann_recall = recall_score(
+    y_test,
+    day5_ann_predictions,
+    zero_division=0
+)
+
+
+# Calculate the ANN test F1 score
+day5_ann_f1 = f1_score(
+    y_test,
+    day5_ann_predictions,
+    zero_division=0
+)
+
+
+# Calculate the ANN test ROC-AUC using probability predictions
+day5_ann_roc_auc = roc_auc_score(
+    y_test,
+    day5_ann_probabilities
+)
+
+
+# Display the ANN test results
+print("\n================================")
+print("DAY 5 ANN TEST RESULTS")
+print("================================")
+
+print(
+    f"Accuracy : "
+    f"{day5_ann_accuracy:.4f}"
+)
+
+print(
+    f"Precision: "
+    f"{day5_ann_precision:.4f}"
+)
+
+print(
+    f"Recall   : "
+    f"{day5_ann_recall:.4f}"
+)
+
+print(
+    f"F1 Score : "
+    f"{day5_ann_f1:.4f}"
+)
+
+print(
+    f"ROC-AUC  : "
+    f"{day5_ann_roc_auc:.4f}"
+)
+
+
+# Show the ANN correct and incorrect prediction counts
+print("\nANN Confusion Matrix:")
+
+print(
+    confusion_matrix(
+        y_test,
+        day5_ann_predictions
+    )
+)
+
+
+# Show detailed ANN results for stayed and exited customers
+print("\nANN Classification Report:")
+
+print(
+    classification_report(
+        y_test,
+        day5_ann_predictions,
+        target_names=[
+            "Stayed",
+            "Exited"
+        ],
+        zero_division=0
+    )
+)
+
+
+# Use the Day 4 classical champion to predict the same test customers
+day5_classical_predictions = (
+    day4_champion_model.predict(
+        X_test
+    )
+)
+
+
+# Get probability predictions from the Day 4 classical champion
+day5_classical_probabilities = (
+    day4_champion_model.predict_proba(
+        X_test
+    )[:, 1]
+)
+
+
+# Calculate the classical champion's accuracy
+day5_classical_accuracy = accuracy_score(
+    y_test,
+    day5_classical_predictions
+)
+
+
+# Calculate the classical champion's precision
+day5_classical_precision = precision_score(
+    y_test,
+    day5_classical_predictions,
+    zero_division=0
+)
+
+
+# Calculate the classical champion's recall
+day5_classical_recall = recall_score(
+    y_test,
+    day5_classical_predictions,
+    zero_division=0
+)
+
+
+# Calculate the classical champion's F1 score
+day5_classical_f1 = f1_score(
+    y_test,
+    day5_classical_predictions,
+    zero_division=0
+)
+
+
+# Calculate the classical champion's ROC-AUC
+day5_classical_roc_auc = roc_auc_score(
+    y_test,
+    day5_classical_probabilities
+)
+
+
+# Put the ANN and classical champion results into one comparison table
+day5_comparison = pd.DataFrame(
+    [
+        {
+            "Model": (
+                "Phase 1 Classical Champion: "
+                + day4_champion_name
+            ),
+            "Accuracy": (
+                day5_classical_accuracy
+            ),
+            "Precision": (
+                day5_classical_precision
+            ),
+            "Recall": (
+                day5_classical_recall
+            ),
+            "F1 Score": (
+                day5_classical_f1
+            ),
+            "ROC-AUC": (
+                day5_classical_roc_auc
+            )
+        },
+
+        {
+            "Model": "Day 5 Keras ANN",
+            "Accuracy": (
+                day5_ann_accuracy
+            ),
+            "Precision": (
+                day5_ann_precision
+            ),
+            "Recall": (
+                day5_ann_recall
+            ),
+            "F1 Score": (
+                day5_ann_f1
+            ),
+            "ROC-AUC": (
+                day5_ann_roc_auc
+            )
+        }
+    ]
+)
+
+
+# Sort the benchmark mainly by recall and then by ROC-AUC
+day5_comparison = day5_comparison.sort_values(
+    by=[
+        "Recall",
+        "ROC-AUC",
+        "F1 Score"
+    ],
+    ascending=False
+).reset_index(drop=True)
+
+
+# Display the head-to-head benchmark
+print("\n================================")
+print("DAY 5 ANN VS CLASSICAL CHAMPION")
+print("================================")
+
+print(
+    day5_comparison.to_string(
+        index=False,
+        float_format=lambda value: f"{value:.4f}"
+    )
+)
+
+
+# Check whether the ANN improved recall compared with the classical champion
+day5_recall_difference = (
+    day5_ann_recall
+    - day5_classical_recall
+)
+
+
+# Give an honest conclusion about whether the ANN helped
+if day5_recall_difference > 0.01:
+
+    day5_conclusion = (
+        "The ANN improved recall by "
+        f"{day5_recall_difference:.4f}. "
+        "The ANN found more customers who exited."
+    )
+
+elif day5_recall_difference < -0.01:
+
+    day5_conclusion = (
+        "The classical champion had better recall by "
+        f"{abs(day5_recall_difference):.4f}. "
+        "The ANN did not improve churn detection."
+    )
+
+else:
+
+    day5_conclusion = (
+        "The ANN and classical champion had similar recall. "
+        "The simpler classical model may be preferable for tabular data."
+    )
+
+
+# Display the final Day 5 conclusion
+print("\nDay 5 conclusion:")
+print(day5_conclusion)
+
+
+# Create a table containing the loss and metrics from every training epoch
+day5_training_history = pd.DataFrame(
+    day5_history.history
+)
+
+
+# Add an easy-to-read epoch number
+day5_training_history.insert(
+    0,
+    "Epoch",
+    range(
+        1,
+        len(day5_training_history) + 1
+    )
+)
+
+
+# Choose paths for the ANN, preprocessor, reports, and metadata
+day5_ann_model_path = (
+    MODEL_DIR
+    / "day5_ann_churn_model.keras"
+)
+
+day5_preprocessor_path = (
+    MODEL_DIR
+    / "day5_ann_preprocessor.joblib"
+)
+
+day5_comparison_path = (
+    REPORT_DIR
+    / "day5_ann_vs_classical.csv"
+)
+
+day5_history_path = (
+    REPORT_DIR
+    / "day5_ann_training_history.csv"
+)
+
+day5_summary_path = (
+    REPORT_DIR
+    / "day5_ann_summary.csv"
+)
+
+
+# Save the trained Keras ANN using the Keras model format
+day5_ann_model.save(
+    day5_ann_model_path
+)
+
+
+# Save the fitted preprocessing pipeline used by the ANN
+joblib.dump(
+    day5_preprocessor,
+    day5_preprocessor_path
+)
+
+
+# Save the ANN versus classical comparison
+day5_comparison.to_csv(
+    day5_comparison_path,
+    index=False
+)
+
+
+# Save the training and validation scores from every epoch
+day5_training_history.to_csv(
+    day5_history_path,
+    index=False
+)
+
+
+# Save important ANN information in a small summary file
+day5_summary = pd.DataFrame(
+    [
+        {
+            "ANN Input Features": (
+                number_of_ann_features
+            ),
+            "Epochs Completed": (
+                day5_epochs_completed
+            ),
+            "Best Epoch": (
+                day5_best_epoch
+            ),
+            "Decision Threshold": 0.50,
+            "ANN Recall": (
+                day5_ann_recall
+            ),
+            "Classical Recall": (
+                day5_classical_recall
+            ),
+            "Recall Difference": (
+                day5_recall_difference
+            ),
+            "Conclusion": (
+                day5_conclusion
+            )
+        }
+    ]
+)
+
+day5_summary.to_csv(
+    day5_summary_path,
+    index=False
+)
+
+
+# Reload the saved ANN to make sure the saved model works
+day5_loaded_ann = tf.keras.models.load_model(
+    day5_ann_model_path
+)
+
+
+# Reload the saved preprocessing pipeline
+day5_loaded_preprocessor = joblib.load(
+    day5_preprocessor_path
+)
+
+
+# Select five customers for checking the reloaded ANN
+day5_sample_customers = X_test.head(
+    5
+)
+
+
+# Transform the sample customers using the reloaded preprocessing
+day5_sample_processed = (
+    day5_loaded_preprocessor.transform(
+        day5_sample_customers
+    )
+)
+
+
+# Convert sparse sample data into a normal array when necessary
+if hasattr(
+    day5_sample_processed,
+    "toarray"
+):
+    day5_sample_processed = (
+        day5_sample_processed.toarray()
+    )
+
+
+# Convert sample input values into TensorFlow's preferred type
+day5_sample_processed = (
+    day5_sample_processed.astype(
+        "float32"
+    )
+)
+
+
+# Predict exit probabilities using the reloaded ANN
+day5_sample_probabilities = (
+    day5_loaded_ann.predict(
+        day5_sample_processed,
+        verbose=0
+    )
+    .reshape(-1)
+)
+
+
+# Convert sample probabilities into 0 or 1 predictions
+day5_sample_predictions = (
+    day5_sample_probabilities >= 0.50
+).astype(int)
+
+
+# Create an easy-to-read sample prediction table
+day5_sample_output = (
+    day5_sample_customers.copy()
+)
+
+day5_sample_output[
+    "Predicted Exited"
+] = day5_sample_predictions
+
+day5_sample_output[
+    "Exit Probability"
+] = day5_sample_probabilities
+
+
+# Display the reloaded ANN predictions
+print("\n================================")
+print("RELOADED ANN SAMPLE PREDICTIONS")
+print("================================")
+
+print(
+    day5_sample_output.to_string(
+        index=False
+    )
+)
+
+
+# Display all files created during Day 5
+print("\n================================")
+print("DAY 5 SAVED FILES")
+print("================================")
+
+print(
+    "Keras ANN model:",
+    day5_ann_model_path
+)
+
+print(
+    "ANN preprocessor:",
+    day5_preprocessor_path
+)
+
+print(
+    "Benchmark report:",
+    day5_comparison_path
+)
+
+print(
+    "Training history:",
+    day5_history_path
+)
+
+print(
+    "ANN summary:",
+    day5_summary_path
+)
